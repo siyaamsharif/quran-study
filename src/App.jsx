@@ -255,23 +255,26 @@ async function quranApi(path, params = {}) {
 }
 
 async function fetchVerseData(surahNum, ayahStart, ayahEnd, translationId) {
-  // Use real quran.com API via /api/quran proxy
   const start = parseInt(ayahStart) || 1;
   const end   = parseInt(ayahEnd)   || start;
+  const limit = end - start + 1;
 
-  const data = await quranApi("verses/by_range", {
+  // Use verses/by_chapter which is the correct quran.com v4 endpoint
+  // Pagination: page size = limit, offset by verse number
+  const data = await quranApi("verses/by_chapter", {
     chapter_number: surahNum,
-    verse_start: start,
-    verse_end: end,
     translations: translationId,
     fields: "text_uthmani",
     word_fields: "text_uthmani,transliteration,translation",
-    per_page: 50,
+    per_page: limit,
     page: 1,
+    // Filter to the range we want by using verse_start/verse_end
+    verse_start: start,
+    verse_end: end,
   });
 
   const verses = data.verses || [];
-  if (!verses.length) throw new Error("No verses returned from quran.com");
+  if (!verses.length) throw new Error("No verses returned — check surah/ayah numbers");
 
   const arabic = verses.map(v => v.text_uthmani || "").join("\n\n");
   const translation = verses.map((v, i) => {
