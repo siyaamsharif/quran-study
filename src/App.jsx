@@ -246,53 +246,44 @@ async function aiCall(prompt, system, maxTokens) {
   }
 }
 
-async function quranApi(path, params = {}) {
-  // Use /api/quran proxy — avoids CORS, adds caching
-  const qs = new URLSearchParams({ path, ...params }).toString();
-  const r = await fetch(`/api/quran?${qs}`, { headers: { Accept: "application/json" } });
-  if (!r.ok) throw new Error(`quran.com API ${r.status}`);
-  return r.json();
+/* ── Quran JSON cache — loaded once from jsdelivr, free forever ── */
+let QURAN_ARABIC = null;   // array of 114 surahs, each an array of ayah strings
+let QURAN_EN     = null;   // same shape, English translation
+
+async function loadQuranData() {
+  if (!QURAN_ARABIC) {
+    const r = await fetch("https://cdn.jsdelivr.net/npm/quran-json@3.1.2/dist/quran.json");
+    QURAN_ARABIC = await r.json();
+  }
+  if (!QURAN_EN) {
+    const r = await fetch("https://cdn.jsdelivr.net/npm/quran-json@3.1.2/dist/quran_en.json");
+    QURAN_EN = await r.json();
+  }
 }
 
-async function fetchVerseData(surahNum, ayahStart, ayahEnd, translationId) {
-  const start = parseInt(ayahStart) || 1;
-  const end   = parseInt(ayahEnd)   || start;
-  const limit = end - start + 1;
+async function fetchVerseData(surahNum, ayahStart, ayahEnd) {
+  await loadQuranData();
 
-  // Use verses/by_chapter which is the correct quran.com v4 endpoint
-  // Pagination: page size = limit, offset by verse number
-  const data = await quranApi("verses/by_chapter", {
-    chapter_number: surahNum,
-    translations: translationId,
-    fields: "text_uthmani",
-    word_fields: "text_uthmani,transliteration,translation",
-    per_page: limit,
-    page: 1,
-    // Filter to the range we want by using verse_start/verse_end
-    verse_start: start,
-    verse_end: end,
-  });
+  const sIdx   = parseInt(surahNum) - 1;          // 0-based
+  const start  = parseInt(ayahStart) || 1;
+  const end    = parseInt(ayahEnd)   || (QURAN_ARABIC[sIdx]?.length ?? start);
 
-  const verses = data.verses || [];
-  if (!verses.length) throw new Error("No verses returned — check surah/ayah numbers");
+  const arabicVerses = QURAN_ARABIC[sIdx] || [];
+  const enVerses     = QURAN_EN[sIdx]     || [];
 
-  const arabic = verses.map(v => v.text_uthmani || "").join("\n\n");
-  const translation = verses.map((v, i) => {
-    const num = start + i;
-    const txt = (v.translations?.[0]?.text || "").replace(/<[^>]+>/g, "").trim();
-    return `(${num}) ${txt}`;
-  }).join("\n");
-  const words = verses.flatMap(v =>
-    (v.words || [])
-      .filter(w => w.char_type_name !== "end" && w.text_uthmani)
-      .map(w => ({
-        arabic: w.text_uthmani || "",
-        transliteration: w.transliteration?.text || "",
-        meaning: w.translation?.text || "",
-      }))
-  );
+  // quran-json stores ayahs as plain strings in order
+  const slice = (arr) => arr.slice(start - 1, end);
 
-  return { arabic, translation, words };
+  const arabicLines = slice(arabicVerses);
+  const enLines     = slice(enVerses);
+
+  if (!arabicLines.length) throw new Error("No verses found — check surah/ayah numbers");
+
+  const arabic      = arabicLines.join("\n\n");
+  const translation = enLines.map((t, i) => `(${start + i}) ${t}`).join("\n");
+
+  // No word-by-word in this dataset — user can use Deep Research for that
+  return { arabic, translation, words: [] };
 }
 
 /* ═══ ROOT ═══ */
@@ -913,7 +904,7 @@ function Notebook({ T, data, upd, activePageId, setActivePageId }) {
     const end = Math.min(parseInt(rawEnd), parseInt(start) + 49); // quran.com supports up to 50
     setFetching(true); setFetchErr(""); setFetchMsg("Fetching from quran.com…");
     try {
-      const { arabic, translation, words } = await fetchVerseData(np.surahNum, start, end, 203);
+      const { arabic, translation, words } = await fetchVerseData(np.surahNum, start, end);
       setNp(p => ({ ...p, arabic, translation, ayahStart: String(start), ayahEnd: String(end) }));
       setFetchMsg(`✓ Filled Arabic, translation${words.length > 0 ? `, and ${words.length} word cards` : ""}`);
       setTempWords(words);
