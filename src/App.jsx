@@ -247,42 +247,43 @@ async function aiCall(prompt, system, maxTokens) {
 }
 
 /* ── Quran JSON cache — loaded once from jsdelivr, free forever ── */
-let QURAN_ARABIC = null;   // array of 114 surahs, each an array of ayah strings
-let QURAN_EN     = null;   // same shape, English translation
+let QURAN_ARABIC = null;
+let QURAN_EN     = null;
 
 async function loadQuranData() {
   if (!QURAN_ARABIC) {
     const r = await fetch("https://cdn.jsdelivr.net/npm/quran-json@3.1.2/dist/quran.json");
-    QURAN_ARABIC = await r.json();
+    QURAN_ARABIC = await r.json(); // array of 114 surah objects: {id, name, verses:[{id,text}]}
   }
   if (!QURAN_EN) {
     const r = await fetch("https://cdn.jsdelivr.net/npm/quran-json@3.1.2/dist/quran_en.json");
-    QURAN_EN = await r.json();
+    QURAN_EN = await r.json(); // same shape
   }
 }
 
 async function fetchVerseData(surahNum, ayahStart, ayahEnd) {
   await loadQuranData();
 
-  const sIdx   = parseInt(surahNum) - 1;          // 0-based
-  const start  = parseInt(ayahStart) || 1;
-  const end    = parseInt(ayahEnd)   || (QURAN_ARABIC[sIdx]?.length ?? start);
+  const sIdx    = parseInt(surahNum) - 1;
+  const surahAr = QURAN_ARABIC[sIdx];
+  const surahEn = QURAN_EN[sIdx];
 
-  const arabicVerses = QURAN_ARABIC[sIdx] || [];
-  const enVerses     = QURAN_EN[sIdx]     || [];
+  if (!surahAr) throw new Error(`Surah ${surahNum} not found`);
 
-  // quran-json stores ayahs as plain strings in order
-  const slice = (arr) => arr.slice(start - 1, end);
+  const start = parseInt(ayahStart) || 1;
+  const end   = parseInt(ayahEnd)   || surahAr.verses.length;
 
-  const arabicLines = slice(arabicVerses);
-  const enLines     = slice(enVerses);
+  const arVerses = surahAr.verses.filter(v => v.id >= start && v.id <= end);
+  const enVerses = (surahEn?.verses || []).filter(v => v.id >= start && v.id <= end);
 
-  if (!arabicLines.length) throw new Error("No verses found — check surah/ayah numbers");
+  if (!arVerses.length) throw new Error("No verses found — check ayah range");
 
-  const arabic      = arabicLines.join("\n\n");
-  const translation = enLines.map((t, i) => `(${start + i}) ${t}`).join("\n");
+  // Arabic: use .text field from quran.json
+  const arabic = arVerses.map(v => v.text).join("\n\n");
 
-  // No word-by-word in this dataset — user can use Deep Research for that
+  // Translation: use .translation field from quran_en.json (NOT .text which is Arabic)
+  const translation = enVerses.map(v => `(${v.id}) ${v.translation || ""}`).join("\n");
+
   return { arabic, translation, words: [] };
 }
 
@@ -307,16 +308,20 @@ export default function App() {
   const makeCss = (T) => `
     @import url('https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Crimson+Pro:ital,wght@0,300;0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
     *{box-sizing:border-box;margin:0;padding:0}
-    body{background:${T.bg};color:${T.text};font-family:'Crimson Pro',Georgia,serif;font-size:16px}
+    body{background:${T.bg};color:${T.text};font-family:'Crimson Pro',Georgia,serif;font-size:17px;font-weight:400}
     ::-webkit-scrollbar{width:4px;height:4px}
     ::-webkit-scrollbar-track{background:transparent}
     ::-webkit-scrollbar-thumb{background:${T.b2};border-radius:2px}
-    input,textarea,select{font-family:'Crimson Pro',serif;background:${T.inputBg};border:1px solid ${T.inputBorder};color:${T.inputText};border-radius:6px;padding:8px 12px;width:100%;outline:none;transition:border-color .2s;font-size:15px}
+    input,textarea,select{font-family:'Crimson Pro',serif;background:${T.inputBg};border:1px solid ${T.inputBorder};color:${T.inputText};border-radius:6px;padding:10px 14px;width:100%;outline:none;transition:border-color .2s;font-size:17px;font-weight:400}
     input:focus,textarea:focus,select:focus{border-color:${T.gold}}
-    textarea{resize:vertical;min-height:80px;line-height:1.75}
+    textarea{resize:vertical;min-height:80px;line-height:1.85}
     select option{background:${T.s2};color:${T.text}}
-    button{cursor:pointer;font-family:'Crimson Pro',serif;transition:all .15s}
-    .ar{font-family:'Amiri',serif;direction:rtl;font-size:1.85em;line-height:2.1;color:${T.gold2};text-align:right}
+    button{cursor:pointer;font-family:'Crimson Pro',serif;transition:all .15s;font-weight:500;font-size:15px}
+    .ar{font-family:'Amiri',serif;direction:rtl;font-size:2.2em;line-height:2.3;color:${T.gold2};text-align:right;font-weight:700}
+    h1{font-size:28px;font-weight:400}
+    h2{font-size:24px;font-weight:400}
+    h3{font-size:20px;font-weight:500}
+    p,span,div{font-size:inherit}
   `;
 
   const navItems = [
@@ -324,8 +329,9 @@ export default function App() {
     { id:"projects",   label:"Projects",       icon:"◰" },
     { id:"notebook",   label:"Notebook",       icon:"◧" },
     { id:"mindmap",    label:"Mind Map",       icon:"◎" },
-    { id:"references", label:"References",     icon:"◫" },
+    { id:"canvas",     label:"Canvas",         icon:"✦" },
     { id:"flashcards", label:"Flashcard Bank", icon:"fc" },
+    { id:"references", label:"References",     icon:"◫" },
   ];
 
   async function doQA() {
@@ -359,21 +365,25 @@ export default function App() {
           {navItems.map(item => (
             <button key={item.id}
               onClick={() => { setNav(item.id); if (item.id !== "projects") setActiveProjectId(null); }}
-              style={{ display:"flex", alignItems:"center", gap:10, width:"100%", padding:"9px 12px", borderRadius:8, border:"none",
+              style={{ display:"flex", alignItems:"center", width:"100%", padding:"10px 12px", borderRadius:8, border:"none",
                 background:nav===item.id ? T.goldM : "transparent",
                 color:nav===item.id ? T.gold : T.muted,
-                fontSize:14, fontWeight:nav===item.id?600:400, marginBottom:2, textAlign:"left" }}>
-              {item.icon === "fc" ? (
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ flexShrink:0, opacity:.85 }}>
-                  <rect x="1" y="3" width="14" height="10" rx="2" stroke="currentColor" strokeWidth="1.4" fill="none"/>
-                  <rect x="4" y="1" width="8" height="2" rx="1" fill="currentColor" opacity=".5"/>
-                  <line x1="4" y1="7" x2="12" y2="7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
-                  <line x1="4" y1="10" x2="9" y2="10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
-                </svg>
-              ) : (
-                <span style={{ fontSize:14, opacity:.85 }}>{item.icon}</span>
-              )}
-              {item.label}
+                fontSize:15, fontWeight:nav===item.id?700:500, marginBottom:2 }}>
+              {/* Icon — fixed width, centered */}
+              <span style={{ width:28, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                {item.icon === "fc" ? (
+                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                    <rect x="1" y="3" width="14" height="10" rx="2" stroke="currentColor" strokeWidth="1.4" fill="none"/>
+                    <rect x="4" y="1" width="8" height="2" rx="1" fill="currentColor" opacity=".5"/>
+                    <line x1="4" y1="7" x2="12" y2="7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                    <line x1="4" y1="10" x2="9" y2="10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                  </svg>
+                ) : (
+                  <span style={{ fontSize:15, opacity:.85 }}>{item.icon}</span>
+                )}
+              </span>
+              {/* Label — left-aligned */}
+              <span style={{ textAlign:"left" }}>{item.label}</span>
             </button>
           ))}
 
@@ -430,6 +440,7 @@ export default function App() {
         {nav==="projects"   && <Projects   T={T} data={data} upd={upd} activeProjectId={activeProjectId} setActiveProjectId={setActiveProjectId} setNav={setNav} setActivePageId={setActivePageId} />}
         {nav==="notebook"   && <Notebook   T={T} data={data} upd={upd} activePageId={activePageId} setActivePageId={setActivePageId} />}
         {nav==="mindmap"    && <MindMap    T={T} data={data} upd={upd} />}
+        {nav==="canvas"     && <InfiniteCanvas T={T} />}
         {nav==="references" && <References T={T} data={data} upd={upd} />}
         {nav==="flashcards" && <FlashcardBank T={T} data={data} upd={upd} />}
         {nav==="settings"   && <Settings   T={T} themeName={themeName} setThemeName={setThemeName} data={data} upd={upd} />}
@@ -566,7 +577,32 @@ function PageView({ T, page, data, upd }) {
   const [fcIdx, setFcIdx]               = useState(0);
   const [fcFlipped, setFcFlipped]       = useState(false);
 
-  function updateNote(sid, val) { upd(d=>({...d,pages:d.pages.map(p=>p.id===page.id?{...p,notes:{...p.notes,[sid]:val}}:p)})); }
+  const [selectedWords, setSelectedWords] = useState(new Set());
+
+  function updateNote(sid, val) {
+    const ts = new Date().toLocaleString("en-GB", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
+    upd(d=>({...d, pages:d.pages.map(p => p.id===page.id
+      ? { ...p, notes:{ ...p.notes, [sid]:val }, noteTimes:{ ...(p.noteTimes||{}), [sid]:ts } }
+      : p
+    )}));
+  }
+
+  function addWordsToBank() {
+    const toAdd = wbw.filter((_,i) => selectedWords.has(i)).map(w => ({
+      ...w, id: Date.now().toString() + "_" + Math.random().toString(36).slice(2),
+      pageTitle: page.title, surah: page.surah, pageId: page.id,
+    }));
+    upd(d => ({ ...d, flashcards: [...(d.flashcards||[]), ...toAdd] }));
+    setSelectedWords(new Set());
+  }
+
+  function toggleWordSelect(i) {
+    setSelectedWords(prev => {
+      const next = new Set(prev);
+      next.has(i) ? next.delete(i) : next.add(i);
+      return next;
+    });
+  }
   function toggleDone(sid) {
     upd(d=>({...d,pages:d.pages.map(p=>{
       if(p.id!==page.id) return p;
@@ -621,10 +657,15 @@ function PageView({ T, page, data, upd }) {
         <div style={{ marginBottom:22 }}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
             <div>
-              <div style={{ fontSize:10, letterSpacing:".2em", color:T.gold, fontFamily:"JetBrains Mono", textTransform:"uppercase", marginBottom:3 }}>
+              <div style={{ fontSize:13, letterSpacing:".05em", color:T.gold, fontFamily:"JetBrains Mono", textTransform:"uppercase", marginBottom:3 }}>
                 {page.surah} · {page.ayahStart}{page.ayahEnd&&page.ayahEnd!==page.ayahStart?`–${page.ayahEnd}`:""}
+                {page.createdAt && (
+                  <span style={{ fontSize:11, color:T.dim, marginLeft:12, textTransform:"none", letterSpacing:0 }}>
+                    created {new Date(page.createdAt).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}
+                  </span>
+                )}
               </div>
-              <h2 style={{ fontSize:22, fontWeight:300, marginBottom:7, color:T.text }}>{page.title}</h2>
+              <h2 style={{ fontSize:26, fontWeight:600, marginBottom:7, color:T.text }}>{page.title}</h2>
               <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
                 {(page.tags||[]).map(t=>(
                   <span key={t} style={{ fontSize:10, background:T.goldM, color:T.gold, border:`1px solid ${T.b2}`, borderRadius:10, padding:"2px 8px" }}>{t}</span>
@@ -672,29 +713,63 @@ function PageView({ T, page, data, upd }) {
               </div>
               {isExp&&(
                 <div style={{ padding:"0 15px 15px" }}>
-                  {sec.id==="wordByWord"&&wbw.length>0&&(
+                  {sec.id==="wordByWord" && (
                     <div style={{ marginBottom:12 }}>
-                      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
-                        <div style={{ fontSize:11, color:T.gold, fontFamily:"JetBrains Mono" }}>{wbw.length} words</div>
-                        {flashWords.length>0&&(
-                          <button onClick={()=>{setFlashMode(true);setFcIdx(0);setFcFlipped(false);}}
-                            style={{ padding:"4px 10px", background:T.teal+"22", border:`1px solid ${T.teal}`, color:T.teal, borderRadius:5, fontSize:11 }}>
-                            🃏 Flashcards
-                          </button>
-                        )}
-                      </div>
-                      <div style={{ display:"flex", flexWrap:"wrap", gap:5, marginBottom:10 }}>
-                        {wbw.map((w,i)=>(
-                          <div key={i} style={{ background:T.s3, border:`1px solid ${T.b1}`, borderRadius:7, padding:"5px 9px", textAlign:"center", minWidth:65 }}>
-                            <div className="ar" style={{ fontSize:"1.1em", marginBottom:2 }}>{w.arabic}</div>
-                            <div style={{ fontSize:10, color:T.muted }}>{w.transliteration}</div>
-                            <div style={{ fontSize:10, color:T.dim }}>{w.meaning}</div>
+                      {wbw.length > 0 ? (
+                        <>
+                          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+                            <div style={{ fontSize:12, color:T.gold }}>
+                              {wbw.length} words — click to select for Vocab Bank
+                              {selectedWords.size > 0 && <span style={{ color:T.green, marginLeft:8 }}>({selectedWords.size} selected)</span>}
+                            </div>
+                            <div style={{ display:"flex", gap:6 }}>
+                              {selectedWords.size > 0 && (
+                                <button onClick={addWordsToBank}
+                                  style={{ padding:"4px 10px", background:T.green+"22", border:`1px solid ${T.green}`, color:T.green, borderRadius:5, fontSize:11, fontWeight:600 }}>
+                                  + Add to Flashcard Bank
+                                </button>
+                              )}
+                              {flashWords.length>0&&(
+                                <button onClick={()=>{setFlashMode(true);setFcIdx(0);setFcFlipped(false);}}
+                                  style={{ padding:"4px 10px", background:T.teal+"22", border:`1px solid ${T.teal}`, color:T.teal, borderRadius:5, fontSize:11 }}>
+                                  🃏 Flashcards
+                                </button>
+                              )}
+                            </div>
                           </div>
-                        ))}
-                      </div>
+                          <div style={{ display:"flex", flexWrap:"wrap", flexDirection:"row-reverse", gap:6, marginBottom:10 }}>
+                            {wbw.map((w,i)=>{
+                              const sel = selectedWords.has(i);
+                              return (
+                                <div key={i} onClick={()=>toggleWordSelect(i)}
+                                  style={{ background:sel ? T.green+"22" : T.s3,
+                                    border:`1.5px solid ${sel ? T.green : T.b1}`,
+                                    borderRadius:8, padding:"6px 10px", textAlign:"center", minWidth:70,
+                                    cursor:"pointer", transition:"all .15s" }}>
+                                  <div className="ar" style={{ fontSize:"1.2em", marginBottom:3 }}>{w.arabic}</div>
+                                  <div style={{ fontSize:11, color:T.muted }}>{w.transliteration}</div>
+                                  <div style={{ fontSize:11, color:T.dim, fontWeight:500 }}>{w.meaning}</div>
+                                  {sel && <div style={{ fontSize:9, color:T.green, marginTop:2 }}>✓</div>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </>
+                      ) : (
+                        <div style={{ background:T.s2, borderRadius:7, padding:"10px 13px", marginBottom:10, fontSize:13, color:T.muted }}>
+                          No word-by-word data yet. Use the Auto-fill button when creating the page, or add words manually in the notes below.
+                        </div>
+                      )}
                     </div>
                   )}
-                  <textarea value={page.notes?.[sec.id]||""} onChange={e=>updateNote(sec.id,e.target.value)} placeholder={`${sec.label} notes…`} style={{ minHeight:110 }} />
+                  <div style={{ position:"relative" }}>
+                    {page.noteTimes?.[sec.id] && (
+                      <div style={{ fontSize:10, color:T.dim, fontFamily:"JetBrains Mono", marginBottom:4, textAlign:"right" }}>
+                        last edited {page.noteTimes[sec.id]}
+                      </div>
+                    )}
+                    <textarea value={page.notes?.[sec.id]||""} onChange={e=>updateNote(sec.id,e.target.value)} placeholder={`${sec.label} notes…`} style={{ minHeight:110 }} />
+                  </div>
                   <div style={{ display:"flex", justifyContent:"flex-end", marginTop:7 }}>
                     <button onClick={()=>toggleDone(sec.id)}
                       style={{ padding:"4px 13px", background:isDone?T.green+"22":"transparent", border:`1px solid ${isDone?T.green:T.b2}`, color:isDone?T.green:T.muted, borderRadius:5, fontSize:11 }}>
@@ -924,21 +999,32 @@ function Notebook({ T, data, upd, activePageId, setActivePageId }) {
     const titleDefault = effectiveStart === effectiveEnd
       ? `${np.surahName} ${effectiveStart}`
       : `${np.surahName} ${effectiveStart}–${effectiveEnd}`;
-    const wbwNote = tempWords.length > 0
-      ? "Word by Word:\n" + tempWords.map(w => `${w.arabic} — ${w.transliteration} — ${w.meaning}`).join("\n")
-      : "";
+
+    // Auto-generate word list from Arabic text — split on spaces, filter empty tokens
+    // tempWords from fetchVerseData is [] since json has no morphology,
+    // so we extract words directly from the Arabic string
+    const autoWords = np.arabic
+      ? np.arabic
+          .split(/[\s\n]+/)
+          .map(w => w.trim())
+          .filter(w => w.length > 0 && /[\u0600-\u06FF]/.test(w)) // keep Arabic chars only
+          .map(w => ({ arabic: w, transliteration: "", meaning: "" }))
+      : [];
+
+    const wordsToUse = tempWords.length > 0 ? tempWords : autoWords;
+
     const newP = {
       id, title: np.title || titleDefault,
       surah: np.surahName, surahNum: np.surahNum,
       ayahStart: effectiveStart, ayahEnd: effectiveEnd,
       arabic: np.arabic, translation: np.translation,
-      wordByWord: tempWords,
+      wordByWord: wordsToUse,
       tags: np.tags.split(",").map(t => t.trim()).filter(Boolean),
       projectId: np.projectId || null,
       sections: SECTION_TYPES.map(s => ({ ...s, content: "" })),
       customSections: [], completedSections: [],
       createdAt: Date.now(),
-      notes: wbwNote ? { wordByWord: wbwNote } : {},
+      notes: {},
     };
     upd(d => ({ ...d, pages: [...d.pages, newP] }));
     setActivePageId(id); setModal(false);
@@ -963,8 +1049,11 @@ function Notebook({ T, data, upd, activePageId, setActivePageId }) {
             return (
               <div key={p.id} onClick={()=>setActivePageId(p.id)}
                 style={{ padding:"9px", borderRadius:8, cursor:"pointer", marginBottom:2, background:activePageId===p.id?T.goldM:"transparent", border:activePageId===p.id?`1px solid ${T.b2}`:"1px solid transparent" }}>
-                <div style={{ fontSize:13, color:activePageId===p.id?T.gold:T.text, fontWeight:activePageId===p.id?600:400, marginBottom:3 }}>{p.title||"Untitled"}</div>
-                <div style={{ fontSize:10, color:T.dim, marginBottom:4, fontFamily:"JetBrains Mono" }}>{p.surah}:{p.ayahStart}</div>
+                <div style={{ fontSize:13, color:activePageId===p.id?T.gold:T.text, fontWeight:activePageId===p.id?600:400, marginBottom:2 }}>{p.title||"Untitled"}</div>
+                <div style={{ fontSize:10, color:T.dim, marginBottom:3, fontFamily:"JetBrains Mono" }}>
+                  {p.surah}:{p.ayahStart}
+                  {p.createdAt && <span style={{ marginLeft:6 }}>· {new Date(p.createdAt).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}</span>}
+                </div>
                 <div style={{ height:2, background:T.s3, borderRadius:1 }}>
                   <div style={{ height:"100%", width:`${Math.round(done/Math.max(tot,1)*100)}%`, background:done===tot&&tot>0?T.green:T.gold, borderRadius:1 }} />
                 </div>
@@ -1182,62 +1271,171 @@ function MindMap({ T, data }) {
 }
 
 /* ═══ REFERENCES ═══ */
+const QUICK_LINKS = [
+  {
+    id:"quran", label:"Quran.com", url:"https://quran.com", color:"#2a8a50",
+    desc:"Read, listen, and explore the Quran with translations, word-by-word, and tafsir",
+  },
+  {
+    id:"sunnah", label:"Sunnah.com", url:"https://sunnah.com", color:"#2a6a8a",
+    desc:"Browse hadith collections — Bukhari, Muslim, Abu Dawud, Tirmidhi, and more",
+  },
+  {
+    id:"tafsir", label:"Tafsir.app", url:"https://tafsir.app", color:"#5a3a7a",
+    desc:"Classical Arabic tafsir — Ibn Kathir, al-Tabari, al-Qurtubi, al-Razi side by side",
+  },
+  {
+    id:"turath", label:"Turath.app", url:"https://app.turath.io", color:"#7a3a5a",
+    desc:"Digital Islamic library — thousands of classical Arabic books, searchable",
+  },
+  {
+    id:"ejtaal", label:"Ejtaal.net", url:"https://ejtaal.net", color:"#3a6a3a",
+    desc:"Arabic root dictionary — Hans Wehr, Lane's Lexicon, and classical dictionaries",
+  },
+  {
+    id:"almaany", label:"Almaany.com", url:"https://www.almaany.com/en/dict/ar-en", color:"#3a5a7a",
+    desc:"Arabic–English dictionary with comprehensive definitions and usage examples",
+  },
+  {
+    id:"corpus", label:"Quran Corpus", url:"https://corpus.quran.com", color:"#6a4a2a",
+    desc:"Word-by-word morphological analysis — roots, grammar, and syntax for every word",
+  },
+  {
+    id:"islamweb", label:"IslamWeb Tafsir", url:"https://www.islamweb.net/en/quran", color:"#2a6a5a",
+    desc:"Tafsir, recitations, and Islamic encyclopaedia in English",
+  },
+  {
+    id:"shamela", label:"Al-Maktaba", url:"https://www.al-maktabeh.com", color:"#7a5a2a",
+    desc:"Al-Maktaba Al-Shamela — the largest classical Islamic library online",
+  },
+];
+
 function References({ T, data, upd }) {
-  const [adding, setAdding] = useState(false);
-  const [nr, setNr] = useState({title:"",type:"link",url:"",author:"",notes:""});
+  const [adding, setAdding]     = useState(false);
+  const [nr, setNr]             = useState({title:"",type:"link",url:"",author:"",notes:""});
+  const [iframeUrl, setIframeUrl] = useState(null); // url currently open in panel
+
   function addRef(){ if(!nr.title.trim()) return; upd(d=>({...d,references:[...d.references,{...nr,id:Date.now().toString(),addedAt:Date.now()}]})); setNr({title:"",type:"link",url:"",author:"",notes:""}); setAdding(false); }
   function deleteRef(id){ upd(d=>({...d,references:d.references.filter(r=>r.id!==id)})); }
-  const icons={link:"🔗",pdf:"📄",book:"📚",lecture:"🎓"};
+  const typeIcons={link:"🔗",pdf:"📄",book:"📚",lecture:"🎓"};
   const grouped={};
   data.references.forEach(r=>{ (grouped[r.type]=grouped[r.type]||[]).push(r); });
+
   return (
-    <div style={{ flex:1, overflowY:"auto", padding:32 }}>
-      <div style={{ maxWidth:800, margin:"0 auto" }}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:24 }}>
-          <div>
-            <div style={{ fontSize:10, letterSpacing:".2em", color:T.gold, fontFamily:"JetBrains Mono", textTransform:"uppercase", marginBottom:4 }}>References</div>
-            <h2 style={{ fontSize:24, fontWeight:300, color:T.text }}>Your Library</h2>
+    <div style={{ flex:1, display:"flex", overflow:"hidden" }}>
+      {/* Left: content */}
+      <div style={{ flex:1, overflowY:"auto", padding:32 }}>
+        <div style={{ maxWidth:800, margin:"0 auto" }}>
+          <div style={{ marginBottom:24 }}>
+            <div style={{ fontSize:11, letterSpacing:".2em", color:T.gold, fontFamily:"JetBrains Mono", textTransform:"uppercase", marginBottom:4 }}>References</div>
+            <h2 style={{ fontSize:24, fontWeight:400, color:T.text }}>Your Library</h2>
           </div>
-          <button onClick={()=>setAdding(true)} style={{ padding:"8px 18px", background:T.goldM, border:`1px solid ${T.gold}`, color:T.gold, borderRadius:8, fontSize:14 }}>+ Add Reference</button>
-        </div>
-        {adding&&(
-          <div style={{ background:T.s1, border:`1px solid ${T.b2}`, borderRadius:12, padding:20, marginBottom:20 }}>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
-              <input value={nr.title} onChange={e=>setNr(r=>({...r,title:e.target.value}))} placeholder="Title *" />
-              <select value={nr.type} onChange={e=>setNr(r=>({...r,type:e.target.value}))}><option value="link">Link</option><option value="pdf">PDF</option><option value="book">Book</option><option value="lecture">Lecture</option></select>
-              <input value={nr.url} onChange={e=>setNr(r=>({...r,url:e.target.value}))} placeholder="URL" />
-              <input value={nr.author} onChange={e=>setNr(r=>({...r,author:e.target.value}))} placeholder="Author / Scholar" />
-            </div>
-            <textarea value={nr.notes} onChange={e=>setNr(r=>({...r,notes:e.target.value}))} placeholder="Notes…" style={{ minHeight:55, marginBottom:10 }} />
-            <div style={{ display:"flex", gap:8 }}>
-              <button onClick={addRef} style={{ padding:"7px 18px", background:T.gold, color:T.accentText, border:"none", borderRadius:6, fontSize:14, fontWeight:600 }}>Save</button>
-              <button onClick={()=>setAdding(false)} style={{ padding:"7px 13px", background:"transparent", border:`1px solid ${T.b1}`, color:T.muted, borderRadius:6, fontSize:13 }}>Cancel</button>
-            </div>
-          </div>
-        )}
-        {data.references.length===0&&!adding&&<div style={{ color:T.dim, fontSize:15, textAlign:"center", padding:48 }}>No references yet.</div>}
-        {["link","pdf","book","lecture"].map(type=>{
-          if(!grouped[type]?.length) return null;
-          return (
-            <div key={type} style={{ marginBottom:22 }}>
-              <div style={{ fontSize:11, letterSpacing:".1em", color:T.dim, textTransform:"uppercase", marginBottom:8, fontFamily:"JetBrains Mono" }}>{icons[type]} {type}s</div>
-              {grouped[type].map(ref=>(
-                <div key={ref.id} style={{ background:T.s1, border:`1px solid ${T.b1}`, borderRadius:10, padding:"13px 15px", marginBottom:7, display:"flex", gap:12, alignItems:"flex-start" }}>
-                  <div style={{ flex:1 }}>
-                    <div style={{ display:"flex", gap:8, marginBottom:3 }}>
-                      <span style={{ fontSize:15, fontWeight:500, color:T.text }}>{ref.title}</span>
-                      {ref.author&&<span style={{ fontSize:12, color:T.dim }}>— {ref.author}</span>}
-                    </div>
-                    {ref.url&&<a href={ref.url} target="_blank" rel="noopener noreferrer" style={{ fontSize:12, color:T.blue, display:"block", marginBottom:3, wordBreak:"break-all" }}>{ref.url}</a>}
-                    {ref.notes&&<p style={{ fontSize:13, color:T.muted, lineHeight:1.6 }}>{ref.notes}</p>}
+
+          {/* Quick-access cards */}
+          <div style={{ marginBottom:32 }}>
+            <div style={{ fontSize:13, color:T.muted, fontWeight:600, marginBottom:14, letterSpacing:".03em" }}>Quick Access</div>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(240px, 1fr))", gap:14 }}>
+              {QUICK_LINKS.map(site => (
+                <div key={site.id}
+                  style={{ background:T.s1, border:`1px solid ${iframeUrl===site.url ? site.color : T.b1}`, borderRadius:12, padding:20,
+                    transition:"border-color .2s" }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
+                    <div style={{ fontSize:16, fontWeight:600, color:T.text }}>{site.label}</div>
+                    <div style={{ width:10, height:10, borderRadius:"50%", background:site.color, marginTop:4, flexShrink:0 }} />
                   </div>
-                  <button onClick={()=>deleteRef(ref.id)} style={{ background:"transparent", border:"none", color:T.dim, fontSize:16 }}>×</button>
+                  <p style={{ fontSize:13, color:T.muted, lineHeight:1.6, marginBottom:14 }}>{site.desc}</p>
+                  <div style={{ display:"flex", gap:8 }}>
+                    <button
+                      onClick={() => setIframeUrl(iframeUrl === site.url ? null : site.url)}
+                      style={{ flex:1, padding:"7px 10px", background:iframeUrl===site.url ? site.color+"22" : T.s2,
+                        border:`1px solid ${iframeUrl===site.url ? site.color : T.b2}`,
+                        color:iframeUrl===site.url ? site.color : T.muted, borderRadius:6, fontSize:13, fontWeight:500 }}>
+                      {iframeUrl===site.url ? "◀ Close panel" : "Open in panel"}
+                    </button>
+                    <a href={site.url} target="_blank" rel="noopener noreferrer"
+                      style={{ padding:"7px 10px", background:"transparent", border:`1px solid ${T.b2}`,
+                        color:T.muted, borderRadius:6, fontSize:12, textDecoration:"none", whiteSpace:"nowrap" }}>
+                      ↗ New tab
+                    </a>
+                  </div>
                 </div>
               ))}
             </div>
-          );
-        })}
+          </div>
+
+          {/* User references */}
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+            <div style={{ fontSize:13, color:T.muted, fontWeight:600, letterSpacing:".03em" }}>Saved References</div>
+            <button onClick={()=>setAdding(true)} style={{ padding:"6px 14px", background:T.goldM, border:`1px solid ${T.gold}`, color:T.gold, borderRadius:7, fontSize:13 }}>+ Add</button>
+          </div>
+          {adding&&(
+            <div style={{ background:T.s1, border:`1px solid ${T.b2}`, borderRadius:12, padding:20, marginBottom:20 }}>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
+                <input value={nr.title} onChange={e=>setNr(r=>({...r,title:e.target.value}))} placeholder="Title *" />
+                <select value={nr.type} onChange={e=>setNr(r=>({...r,type:e.target.value}))}><option value="link">Link</option><option value="pdf">PDF</option><option value="book">Book</option><option value="lecture">Lecture</option></select>
+                <input value={nr.url} onChange={e=>setNr(r=>({...r,url:e.target.value}))} placeholder="URL" />
+                <input value={nr.author} onChange={e=>setNr(r=>({...r,author:e.target.value}))} placeholder="Author / Scholar" />
+              </div>
+              <textarea value={nr.notes} onChange={e=>setNr(r=>({...r,notes:e.target.value}))} placeholder="Notes…" style={{ minHeight:55, marginBottom:10 }} />
+              <div style={{ display:"flex", gap:8 }}>
+                <button onClick={addRef} style={{ padding:"7px 18px", background:T.gold, color:T.accentText, border:"none", borderRadius:6, fontSize:14, fontWeight:600 }}>Save</button>
+                <button onClick={()=>setAdding(false)} style={{ padding:"7px 13px", background:"transparent", border:`1px solid ${T.b1}`, color:T.muted, borderRadius:6, fontSize:13 }}>Cancel</button>
+              </div>
+            </div>
+          )}
+          {data.references.length===0&&!adding&&<div style={{ color:T.dim, fontSize:14, padding:"16px 0" }}>No saved references yet.</div>}
+          {["link","pdf","book","lecture"].map(type=>{
+            if(!grouped[type]?.length) return null;
+            return (
+              <div key={type} style={{ marginBottom:22 }}>
+                <div style={{ fontSize:11, letterSpacing:".1em", color:T.dim, textTransform:"uppercase", marginBottom:8, fontFamily:"JetBrains Mono" }}>{typeIcons[type]} {type}s</div>
+                {grouped[type].map(ref=>(
+                  <div key={ref.id} style={{ background:T.s1, border:`1px solid ${T.b1}`, borderRadius:10, padding:"13px 15px", marginBottom:7, display:"flex", gap:12, alignItems:"flex-start" }}>
+                    <div style={{ flex:1 }}>
+                      <div style={{ display:"flex", gap:8, marginBottom:3 }}>
+                        <span style={{ fontSize:15, fontWeight:500, color:T.text }}>{ref.title}</span>
+                        {ref.author&&<span style={{ fontSize:12, color:T.dim }}>— {ref.author}</span>}
+                      </div>
+                      {ref.url&&(
+                        <div style={{ display:"flex", gap:8, marginBottom:3, alignItems:"center" }}>
+                          <a href={ref.url} target="_blank" rel="noopener noreferrer" style={{ fontSize:12, color:T.blue, wordBreak:"break-all" }}>{ref.url}</a>
+                          <button onClick={()=>setIframeUrl(iframeUrl===ref.url?null:ref.url)}
+                            style={{ padding:"2px 8px", background:"transparent", border:`1px solid ${T.b2}`, color:T.muted, borderRadius:4, fontSize:11, flexShrink:0 }}>
+                            {iframeUrl===ref.url?"Close":"Panel"}
+                          </button>
+                        </div>
+                      )}
+                      {ref.notes&&<p style={{ fontSize:13, color:T.muted, lineHeight:1.6 }}>{ref.notes}</p>}
+                    </div>
+                    <button onClick={()=>deleteRef(ref.id)} style={{ background:"transparent", border:"none", color:T.dim, fontSize:16 }}>×</button>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
       </div>
+
+      {/* Right: iframe panel */}
+      {iframeUrl && (
+        <div style={{ width:"50%", borderLeft:`1px solid ${T.b1}`, display:"flex", flexDirection:"column", background:T.s1 }}>
+          <div style={{ padding:"10px 14px", borderBottom:`1px solid ${T.b1}`, display:"flex", alignItems:"center", gap:10 }}>
+            <span style={{ fontSize:13, color:T.muted, flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontFamily:"JetBrains Mono" }}>{iframeUrl}</span>
+            <a href={iframeUrl} target="_blank" rel="noopener noreferrer"
+              style={{ fontSize:11, color:T.blue, textDecoration:"none", whiteSpace:"nowrap" }}>↗ Full tab</a>
+            <button onClick={()=>setIframeUrl(null)} style={{ background:"transparent", border:"none", color:T.dim, fontSize:18, lineHeight:1, padding:"0 4px" }}>×</button>
+          </div>
+          <iframe
+            src={iframeUrl}
+            title="Reference panel"
+            style={{ flex:1, border:"none", background:"#fff" }}
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+          />
+          <div style={{ padding:"8px 14px", borderTop:`1px solid ${T.b1}`, fontSize:11, color:T.dim }}>
+            Some sites block embedding — use ↗ Full tab if the panel shows blank.
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1538,6 +1736,274 @@ function Settings({ T, themeName, setThemeName, data, upd }) {
             <button onClick={clearAll} style={{ padding:"8px 20px", background:"transparent", border:`1px solid ${T.red}`, color:T.red, borderRadius:7, fontSize:13 }}>Delete All Data</button>
           </div>
         </section>
+      </div>
+    </div>
+  );
+}
+
+/* ═══ INFINITE CANVAS ═══ */
+function InfiniteCanvas({ T }) {
+  const canvasRef = useRef(null);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [tool, setTool] = useState("select"); // select | pen | text | sticky | rect | arrow
+  const [nodes, setNodes] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("quran_canvas_nodes") || "[]"); } catch { return []; }
+  });
+  const [strokes, setStrokes] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("quran_canvas_strokes") || "[]"); } catch { return []; }
+  });
+  const [drawing, setDrawing] = useState(null); // current pen stroke
+  const [dragging, setDragging] = useState(null); // {id, offsetX, offsetY}
+  const [panning, setPanning] = useState(false);
+  const [editingNode, setEditingNode] = useState(null);
+  const [penColor, setPenColor] = useState(T.gold);
+  const [penSize, setPenSize] = useState(2);
+  const lastPan = useRef({ x: 0, y: 0 });
+
+  useEffect(() => { localStorage.setItem("quran_canvas_nodes", JSON.stringify(nodes)); }, [nodes]);
+  useEffect(() => { localStorage.setItem("quran_canvas_strokes", JSON.stringify(strokes)); }, [strokes]);
+
+  function screenToCanvas(sx, sy) {
+    return { x: (sx - pan.x) / zoom, y: (sy - pan.y) / zoom };
+  }
+
+  function addNode(type) {
+    const cx = (window.innerWidth / 2 - pan.x) / zoom;
+    const cy = (window.innerHeight / 2 - pan.y) / zoom;
+    const base = { id: Date.now().toString(), x: cx - 80, y: cy - 40, type };
+    if (type === "sticky") setNodes(n => [...n, { ...base, w: 180, h: 120, text: "New note", color: "#c9a84c" }]);
+    if (type === "text")   setNodes(n => [...n, { ...base, w: 200, h: 40, text: "Text", color: T.text }]);
+    if (type === "rect")   setNodes(n => [...n, { ...base, w: 160, h: 100, text: "", color: T.b2 }]);
+  }
+
+  function onMouseDown(e) {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+    const cp = screenToCanvas(sx, sy);
+
+    if (tool === "pen") {
+      setDrawing({ color: penColor, size: penSize, points: [cp] });
+      return;
+    }
+    if (tool === "select") {
+      // Check if clicking a node
+      const hit = [...nodes].reverse().find(n =>
+        cp.x >= n.x && cp.x <= n.x + n.w && cp.y >= n.y && cp.y <= n.y + n.h
+      );
+      if (hit) {
+        setDragging({ id: hit.id, offsetX: cp.x - hit.x, offsetY: cp.y - hit.y });
+      } else {
+        setPanning(true);
+        lastPan.current = { x: e.clientX, y: e.clientY };
+      }
+    } else {
+      setPanning(true);
+      lastPan.current = { x: e.clientX, y: e.clientY };
+    }
+  }
+
+  function onMouseMove(e) {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+    const cp = screenToCanvas(sx, sy);
+
+    if (drawing) {
+      setDrawing(d => ({ ...d, points: [...d.points, cp] }));
+      return;
+    }
+    if (dragging) {
+      setNodes(ns => ns.map(n => n.id === dragging.id
+        ? { ...n, x: cp.x - dragging.offsetX, y: cp.y - dragging.offsetY }
+        : n));
+      return;
+    }
+    if (panning) {
+      const dx = e.clientX - lastPan.current.x;
+      const dy = e.clientY - lastPan.current.y;
+      setPan(p => ({ x: p.x + dx, y: p.y + dy }));
+      lastPan.current = { x: e.clientX, y: e.clientY };
+    }
+  }
+
+  function onMouseUp() {
+    if (drawing && drawing.points.length > 1) {
+      setStrokes(s => [...s, drawing]);
+    }
+    setDrawing(null);
+    setDragging(null);
+    setPanning(false);
+  }
+
+  function onWheel(e) {
+    e.preventDefault();
+    const rect = canvasRef.current.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    const factor = e.deltaY < 0 ? 1.1 : 0.9;
+    const newZoom = Math.max(0.1, Math.min(5, zoom * factor));
+    // Zoom toward cursor
+    setPan(p => ({
+      x: mx - (mx - p.x) * (newZoom / zoom),
+      y: my - (my - p.y) * (newZoom / zoom),
+    }));
+    setZoom(newZoom);
+  }
+
+  function strokeToPath(pts) {
+    if (!pts || pts.length < 2) return "";
+    let d = `M ${pts[0].x} ${pts[0].y}`;
+    for (let i = 1; i < pts.length; i++) d += ` L ${pts[i].x} ${pts[i].y}`;
+    return d;
+  }
+
+  function deleteNode(id) { setNodes(ns => ns.filter(n => n.id !== id)); }
+  function clearStrokes() { setStrokes([]); }
+  function clearAll() { if (window.confirm("Clear entire canvas?")) { setNodes([]); setStrokes([]); } }
+  function resetView() { setPan({ x: 0, y: 0 }); setZoom(1); }
+
+  const tools = [
+    { id:"select", label:"Select", icon:"↖" },
+    { id:"pen",    label:"Pen",    icon:"✏" },
+    { id:"sticky", label:"Sticky", icon:"□", action:()=>addNode("sticky") },
+    { id:"text",   label:"Text",   icon:"T", action:()=>addNode("text") },
+    { id:"rect",   label:"Shape",  icon:"▭", action:()=>addNode("rect") },
+  ];
+
+  return (
+    <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", position:"relative" }}>
+      {/* Toolbar */}
+      <div style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 16px", background:T.s1, borderBottom:`1px solid ${T.b1}`, flexWrap:"wrap" }}>
+        <div style={{ display:"flex", gap:4 }}>
+          {tools.map(t => (
+            <button key={t.id}
+              onClick={() => { if (t.action) { setTool("select"); t.action(); } else setTool(t.id); }}
+              title={t.label}
+              style={{ padding:"6px 12px", borderRadius:6, border:`1.5px solid ${tool===t.id ? T.gold : T.b1}`, background:tool===t.id ? T.goldM : T.s2, color:tool===t.id ? T.gold : T.muted, fontSize:14, fontWeight:tool===t.id?700:400, minWidth:38 }}>
+              {t.icon}
+            </button>
+          ))}
+        </div>
+        {tool === "pen" && (
+          <div style={{ display:"flex", gap:8, alignItems:"center", borderLeft:`1px solid ${T.b1}`, paddingLeft:12 }}>
+            <label style={{ fontSize:12, color:T.muted }}>Color</label>
+            <input type="color" value={penColor} onChange={e=>setPenColor(e.target.value)}
+              style={{ width:28, height:28, padding:0, border:"none", cursor:"pointer", borderRadius:4 }} />
+            <label style={{ fontSize:12, color:T.muted }}>Size</label>
+            <input type="range" min="1" max="12" value={penSize} onChange={e=>setPenSize(Number(e.target.value))}
+              style={{ width:80 }} />
+            <span style={{ fontSize:12, color:T.muted, fontFamily:"JetBrains Mono" }}>{penSize}px</span>
+            <button onClick={clearStrokes} style={{ padding:"4px 10px", fontSize:12, background:"transparent", border:`1px solid ${T.red}`, color:T.red, borderRadius:5 }}>
+              Clear pen
+            </button>
+          </div>
+        )}
+        <div style={{ marginLeft:"auto", display:"flex", gap:6, alignItems:"center" }}>
+          <button onClick={()=>setZoom(z=>Math.min(5,z*1.2))} style={{ padding:"4px 10px", background:T.s2, border:`1px solid ${T.b1}`, color:T.text, borderRadius:5, fontSize:13 }}>+</button>
+          <span style={{ fontSize:12, color:T.muted, fontFamily:"JetBrains Mono", minWidth:42, textAlign:"center" }}>{Math.round(zoom*100)}%</span>
+          <button onClick={()=>setZoom(z=>Math.max(0.1,z*0.8))} style={{ padding:"4px 10px", background:T.s2, border:`1px solid ${T.b1}`, color:T.text, borderRadius:5, fontSize:13 }}>−</button>
+          <button onClick={resetView} style={{ padding:"4px 10px", background:T.s2, border:`1px solid ${T.b1}`, color:T.muted, borderRadius:5, fontSize:11 }}>Reset</button>
+          <button onClick={clearAll} style={{ padding:"4px 10px", background:"transparent", border:`1px solid ${T.red}`, color:T.red, borderRadius:5, fontSize:11 }}>Clear all</button>
+        </div>
+      </div>
+
+      {/* Canvas */}
+      <div ref={canvasRef}
+        style={{ flex:1, overflow:"hidden", position:"relative", background:T.bg,
+          cursor: tool==="pen" ? "crosshair" : panning ? "grabbing" : tool==="select" ? "default" : "crosshair" }}
+        onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp}
+        onWheel={onWheel}>
+
+        {/* Dot grid background */}
+        <svg style={{ position:"absolute", inset:0, width:"100%", height:"100%", pointerEvents:"none" }}>
+          <defs>
+            <pattern id="cgrid" width={32*zoom} height={32*zoom} patternUnits="userSpaceOnUse"
+              x={pan.x % (32*zoom)} y={pan.y % (32*zoom)}>
+              <circle cx="1" cy="1" r="0.7" fill={T.b1} />
+            </pattern>
+          </defs>
+          <rect width="100%" height="100%" fill="url(#cgrid)" />
+        </svg>
+
+        {/* Canvas content layer */}
+        <div style={{ transform:`translate(${pan.x}px,${pan.y}px) scale(${zoom})`, transformOrigin:"0 0", position:"absolute", width:1, height:1 }}>
+
+          {/* SVG layer for strokes */}
+          <svg style={{ position:"absolute", overflow:"visible", pointerEvents:"none" }}>
+            {strokes.map((s, si) => (
+              <path key={si} d={strokeToPath(s.points)} stroke={s.color} strokeWidth={s.size}
+                fill="none" strokeLinecap="round" strokeLinejoin="round" opacity="0.9" />
+            ))}
+            {drawing && (
+              <path d={strokeToPath(drawing.points)} stroke={drawing.color} strokeWidth={drawing.size}
+                fill="none" strokeLinecap="round" strokeLinejoin="round" opacity="0.9" />
+            )}
+          </svg>
+
+          {/* Nodes */}
+          {nodes.map(node => (
+            <div key={node.id}
+              style={{ position:"absolute", left:node.x, top:node.y, width:node.w, userSelect:"none" }}
+              onMouseDown={e => { if(tool==="select"){e.stopPropagation();}}}
+            >
+              {node.type === "sticky" && (
+                <div style={{ background:node.color+"33", border:`2px solid ${node.color}`, borderRadius:10,
+                  padding:"10px 12px", minHeight:node.h, position:"relative" }}>
+                  <button onClick={()=>deleteNode(node.id)}
+                    style={{ position:"absolute", top:4, right:6, background:"transparent", border:"none", color:T.dim, fontSize:14, lineHeight:1 }}>×</button>
+                  {editingNode === node.id ? (
+                    <textarea autoFocus defaultValue={node.text}
+                      style={{ background:"transparent", border:"none", color:T.text, width:"100%", minHeight:80, fontSize:14, lineHeight:1.6, outline:"none", resize:"none" }}
+                      onBlur={e => { setNodes(ns => ns.map(n => n.id===node.id ? {...n,text:e.target.value} : n)); setEditingNode(null); }} />
+                  ) : (
+                    <div style={{ fontSize:14, color:T.text, lineHeight:1.6, cursor:"text", whiteSpace:"pre-wrap", minHeight:80, paddingRight:16 }}
+                      onDoubleClick={()=>setEditingNode(node.id)}>
+                      {node.text || <span style={{color:T.dim}}>Double-click to edit</span>}
+                    </div>
+                  )}
+                </div>
+              )}
+              {node.type === "text" && (
+                <div style={{ position:"relative" }}>
+                  <button onClick={()=>deleteNode(node.id)}
+                    style={{ position:"absolute", top:-16, right:0, background:"transparent", border:"none", color:T.dim, fontSize:12, lineHeight:1 }}>×</button>
+                  {editingNode === node.id ? (
+                    <input autoFocus defaultValue={node.text}
+                      style={{ background:"transparent", border:`1px dashed ${T.b2}`, color:T.text, fontSize:18, fontWeight:600, padding:"2px 6px", width:"100%" }}
+                      onBlur={e => { setNodes(ns => ns.map(n => n.id===node.id ? {...n,text:e.target.value} : n)); setEditingNode(null); }} />
+                  ) : (
+                    <div style={{ fontSize:18, fontWeight:600, color:T.text, cursor:"text", padding:"2px 0" }}
+                      onDoubleClick={()=>setEditingNode(node.id)}>
+                      {node.text || <span style={{color:T.dim,fontSize:14}}>Double-click</span>}
+                    </div>
+                  )}
+                </div>
+              )}
+              {node.type === "rect" && (
+                <div style={{ background:T.s2, border:`2px solid ${T.b2}`, borderRadius:8,
+                  minHeight:node.h, position:"relative", padding:"8px 10px" }}>
+                  <button onClick={()=>deleteNode(node.id)}
+                    style={{ position:"absolute", top:4, right:6, background:"transparent", border:"none", color:T.dim, fontSize:14 }}>×</button>
+                  {editingNode===node.id ? (
+                    <textarea autoFocus defaultValue={node.text}
+                      style={{ background:"transparent", border:"none", color:T.text, width:"100%", minHeight:80, fontSize:14, outline:"none", resize:"none" }}
+                      onBlur={e => { setNodes(ns => ns.map(n => n.id===node.id ? {...n,text:e.target.value} : n)); setEditingNode(null); }} />
+                  ) : (
+                    <div style={{ fontSize:14, color:T.text, minHeight:80, cursor:"text", whiteSpace:"pre-wrap", paddingRight:16 }}
+                      onDoubleClick={()=>setEditingNode(node.id)}>
+                      {node.text || <span style={{color:T.dim}}>Double-click to edit</span>}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Bottom hint */}
+      <div style={{ padding:"6px 16px", background:T.s1, borderTop:`1px solid ${T.b1}`, fontSize:12, color:T.dim, fontFamily:"JetBrains Mono", display:"flex", gap:24 }}>
+        <span>Scroll to zoom · Drag to pan · Double-click nodes to edit</span>
+        <span>{nodes.length} nodes · {strokes.length} strokes</span>
       </div>
     </div>
   );
